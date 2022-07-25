@@ -8,5 +8,8 @@ edition = "2021"
 [dependencies]
 aws-config = "0.15.0"
 aws-sdk-ec2 = "0.15.0"
+aws-sdk-s3 = "0.15.0"
 tokio = { version = "1", features = ["full"] }
 dotenv = "0.15.0"
+anyhow = "1.0"
+bytes = "*"
