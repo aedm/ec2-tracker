@@ -18,23 +18,25 @@ use itertools::Itertools;
 use serde::Serialize;
 use std::time::Duration;
 use std::time::Instant;
+use tracing::{debug, error, info, warn, Level};
+use tracing_subscriber::FmtSubscriber;
 
 const DATE_FORMAT: &str = "%Y%m%d-%H%M%S";
-static REGIONS: &[&str] = &[
-    "us-east-2",
-    "us-east-1",
-    "us-west-1",
-    "us-west-2",
-    "eu-central-1",
-    "eu-west-1",
-    "eu-west-2",
-    "eu-west-3",
-    "eu-north-1",
-];
-// static REGIONS: &[&str] = &["us-east-2"];
+// static REGIONS: &[&str] = &[
+//     "us-east-2",
+//     "us-east-1",
+//     "us-west-1",
+//     "us-west-2",
+//     "eu-central-1",
+//     "eu-west-1",
+//     "eu-west-2",
+//     "eu-west-3",
+//     "eu-north-1",
+// ];
+static REGIONS: &[&str] = &["us-east-2"];
 
 // Uploads a file to S3.
-async fn upload_file(bucket: &str, key: &str, content: &str) -> Result<()> {
+async fn upload_file_to_s3(bucket: &str, key: &str, content: &str) -> Result<()> {
     let region = RegionProviderChain::default_provider().or_else("us-east-1");
     let shared_config = aws_config::from_env().region(region).load().await;
     let client: aws_sdk_s3::Client = aws_sdk_s3::Client::new(&shared_config);
@@ -52,7 +54,8 @@ async fn upload_file(bucket: &str, key: &str, content: &str) -> Result<()> {
     Ok(())
 }
 
-async fn show_state(
+#[tracing::instrument]
+async fn fetch_marketplace_offers_once(
     region_name: String,
     offering_class: OfferingClassType,
     offering_type: OfferingTypeValues,
@@ -60,7 +63,6 @@ async fn show_state(
     let region = Region::new(region_name.clone());
     let shared_config = aws_config::from_env().region(region).load().await;
     let client = Client::new(&shared_config);
-    // return Ok(vec![]);
 
     let filter = filter::Builder::default()
         .set_name(Some("marketplace".to_string()))
@@ -70,18 +72,18 @@ async fn show_state(
     let mut next_token = None;
     let mut res = vec![];
     for count in 1.. {
+        let span = tracing::debug_span!("asdfasdf");
+        let _guard = span.enter();
         let resp = client
             .describe_reserved_instances_offerings()
             .filters(filter.clone())
             .include_marketplace(true)
-            // .instance_type(InstanceType::C54xlarge)
-            // .product_description(CapacityReservationInstancePlatform::LinuxUnix.into())
             .offering_class(offering_class.clone())
-            // .instance_tenancy(Tenancy::Default)
             .offering_type(offering_type.clone())
             .set_next_token(next_token.clone())
             .send()
             .await;
+        drop(_guard);
 
         let resp = if let Ok(x) = resp {
             x
@@ -103,11 +105,34 @@ async fn show_state(
         if next_token.is_none() {
             break;
         }
-        println!("{:4}, {:?}", count, chrono::offset::Local::now());
+        debug!("Iteration {count}");
     }
 
-    println!("{:#?}", res);
+    info!("Result length: {}", res.len());
     Ok(res)
+}
+
+#[tracing::instrument]
+async fn fetch_marketplace_offers(
+    region_name: String,
+    offering_class: OfferingClassType,
+    offering_type: OfferingTypeValues,
+) -> Result<Vec<ReservedInstancesOffering>> {
+    let mut result = Ok(vec![]);
+    for i in 0..3 {
+        result = fetch_marketplace_offers_once(
+            region_name.clone(),
+            offering_class.clone(),
+            offering_type.clone(),
+        )
+        .await;
+        if result.is_ok() {
+            return result;
+        } else {
+            warn!("Iteration {} failed: {:?}", i, result);
+        }
+    }
+    result
 }
 
 fn print_type_of<T>(_: &T) {
@@ -215,6 +240,13 @@ fn add_offerings(
 #[tokio::main]
 async fn main() -> Result<()> {
     let _ = dotenv();
+    // let subscriber = FmtSubscriber::builder()
+    //     .with_max_level(Level::DEBUG)
+    //     .finish();
+    // tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
+    tracing_subscriber::fmt::init();
+
+    info!("Starting");
 
     let offering_classes = [Standard, Convertible];
     let offering_types = [AllUpfront, PartialUpfront, NoUpfront];
@@ -233,40 +265,42 @@ async fn main() -> Result<()> {
                     let offering_class_clone = offering_class.clone();
                     let offering_type_clone = offering_type.clone();
                     let res = tokio::spawn(async {
-                        show_state(region_clone, offering_class_clone, offering_type_clone).await
+                        fetch_marketplace_offers(
+                            region_clone,
+                            offering_class_clone,
+                            offering_type_clone,
+                        )
+                        .await
                     });
                     tasks.push((region.to_string(), res));
                 }
             }
         }
 
-        // let tasks = REGIONS
-        //     .iter()
-        //     .map(|&region| {
-        //         let region_clone = region.to_string();
-        //         let res = tokio::spawn(async { show_state(region_clone).await });
-        //         (region.to_string(), res)
-        //     })
-        //     .collect_vec();
-
         // Collect results
         let mut reserved = vec![];
+        let mut has_error = false;
         for task in tasks {
             let (region, handle) = task;
             let result = handle.await?;
 
             if let Ok(mut list) = result {
                 add_offerings(&mut reserved, &list, &region);
+                info!("Added {} offerings from {}", list.len(), region);
             } else {
-                println!("Err: {}, {:?}", region, result);
-                continue 'foo;
+                error!("{}, {:?}", region, result);
+                has_error = true;
             }
+        }
+
+        if has_error {
+            continue;
         }
 
         // Write to file
         let json = serde_json::to_string(&reserved)?;
         let file_name = format!("{date}-v2.json");
-        upload_file("ec2-scraper", &file_name, &json).await?;
+        upload_file_to_s3("ec2-scraper", &file_name, &json).await?;
 
         tokio::time::sleep(Duration::from_secs(60)).await;
     }
