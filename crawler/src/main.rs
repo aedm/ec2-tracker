@@ -2,6 +2,7 @@ extern crate dotenv;
 
 use anyhow::{anyhow, Result};
 use aws_config::meta::region::RegionProviderChain;
+use aws_sdk_ec2::error::DescribeReservedInstancesOfferingsErrorKind;
 use aws_sdk_ec2::model::CapacityReservationInstancePlatform::LinuxUnix;
 use aws_sdk_ec2::model::OfferingClassType::{Convertible, Standard};
 use aws_sdk_ec2::model::OfferingTypeValues::{AllUpfront, NoUpfront, PartialUpfront};
@@ -78,13 +79,17 @@ async fn show_state(
             .offering_class(offering_class.clone())
             // .instance_tenancy(Tenancy::Default)
             .offering_type(offering_type.clone())
-            .set_next_token(next_token)
+            .set_next_token(next_token.clone())
             .send()
             .await;
 
         let resp = if let Ok(x) = resp {
             x
         } else {
+            if format!("{:?}", resp).contains("RequestLimitExceeded") {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                continue;
+            }
             return Err(anyhow!("{:?} {:#?}", region_name, resp));
         };
 
