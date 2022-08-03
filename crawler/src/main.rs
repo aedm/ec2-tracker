@@ -22,18 +22,18 @@ use tracing::{debug, error, info, warn, Level};
 use tracing_subscriber::FmtSubscriber;
 
 const DATE_FORMAT: &str = "%Y%m%d-%H%M%S";
-// static REGIONS: &[&str] = &[
-//     "us-east-2",
-//     "us-east-1",
-//     "us-west-1",
-//     "us-west-2",
-//     "eu-central-1",
-//     "eu-west-1",
-//     "eu-west-2",
-//     "eu-west-3",
-//     "eu-north-1",
-// ];
-static REGIONS: &[&str] = &["us-east-2"];
+static REGIONS: &[&str] = &[
+    "us-east-2",
+    "us-east-1",
+    "us-west-1",
+    "us-west-2",
+    "eu-central-1",
+    "eu-west-1",
+    "eu-west-2",
+    "eu-west-3",
+    "eu-north-1",
+];
+// static REGIONS: &[&str] = &["us-east-2"];
 
 // Uploads a file to S3.
 async fn upload_file_to_s3(bucket: &str, key: &str, content: &str) -> Result<()> {
