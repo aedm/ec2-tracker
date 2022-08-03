@@ -73,7 +73,7 @@ async fn show_state(
             .describe_reserved_instances_offerings()
             .filters(filter.clone())
             .include_marketplace(true)
-            .instance_type(InstanceType::C54xlarge)
+            // .instance_type(InstanceType::C54xlarge)
             // .product_description(CapacityReservationInstancePlatform::LinuxUnix.into())
             .offering_class(offering_class.clone())
             // .instance_tenancy(Tenancy::Default)
@@ -213,8 +213,8 @@ async fn main() -> Result<()> {
 
     let offering_classes = [Standard, Convertible];
     let offering_types = [AllUpfront, PartialUpfront, NoUpfront];
-    let offering_classes = [Standard];
-    let offering_types = [AllUpfront];
+    // let offering_classes = [Standard];
+    // let offering_types = [AllUpfront];
 
     'foo: loop {
         let date = chrono::offset::Local::now().format(DATE_FORMAT).to_string();
