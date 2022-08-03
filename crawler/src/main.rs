@@ -3,9 +3,11 @@ extern crate dotenv;
 use anyhow::{anyhow, Result};
 use aws_config::meta::region::RegionProviderChain;
 use aws_sdk_ec2::model::CapacityReservationInstancePlatform::LinuxUnix;
+use aws_sdk_ec2::model::OfferingClassType::{Convertible, Standard};
+use aws_sdk_ec2::model::OfferingTypeValues::{AllUpfront, NoUpfront, PartialUpfront};
 use aws_sdk_ec2::model::{
     filter, CapacityReservationInstancePlatform, Filter, InstanceType, OfferingClassType,
-    ReservedInstancesOffering, RiProductDescription, Tenancy,
+    OfferingTypeValues, ReservedInstancesOffering, RiProductDescription, Tenancy,
 };
 use aws_sdk_ec2::{Client, Region};
 use aws_sdk_s3::types::ByteStream;
@@ -17,17 +19,19 @@ use std::time::Duration;
 use std::time::Instant;
 
 const DATE_FORMAT: &str = "%Y%m%d-%H%M%S";
-static REGIONS: &[&str] = &[
-    "us-east-2",
-    "us-east-1",
-    "us-west-1",
-    "us-west-2",
-    "eu-central-1",
-    "eu-west-1",
-    "eu-west-2",
-    "eu-west-3",
-    "eu-north-1",
-];
+// static REGIONS: &[&str] = &[
+//     "us-east-2",
+//     "us-east-1",
+//     "us-west-1",
+//     "us-west-2",
+//     "eu-central-1",
+//     "eu-west-1",
+//     "eu-west-2",
+//     "eu-west-3",
+//     "eu-north-1",
+// ];
+static REGIONS: &[&str] = &["us-east-2"];
+
 // Uploads a file to S3.
 async fn upload_file(bucket: &str, key: &str, content: &str) -> Result<()> {
     let region = RegionProviderChain::default_provider().or_else("us-east-1");
@@ -47,7 +51,11 @@ async fn upload_file(bucket: &str, key: &str, content: &str) -> Result<()> {
     Ok(())
 }
 
-async fn show_state(region_name: String) -> Result<Vec<ReservedInstancesOffering>> {
+async fn show_state(
+    region_name: String,
+    offering_class: OfferingClassType,
+    offering_type: OfferingTypeValues,
+) -> Result<Vec<ReservedInstancesOffering>> {
     let region = Region::new(region_name.clone());
     let shared_config = aws_config::from_env().region(region).load().await;
     let client = Client::new(&shared_config);
@@ -65,11 +73,11 @@ async fn show_state(region_name: String) -> Result<Vec<ReservedInstancesOffering
             .describe_reserved_instances_offerings()
             .filters(filter.clone())
             .include_marketplace(true)
-            // .instance_type(InstanceType::C54xlarge)
-            // .instance_tenancy(Tenancy::Default)
+            .instance_type(InstanceType::C54xlarge)
             // .product_description(CapacityReservationInstancePlatform::LinuxUnix.into())
-            // .offering_class(OfferingClassType::Standard)
+            .offering_class(offering_class.clone())
             // .instance_tenancy(Tenancy::Default)
+            .offering_type(offering_type.clone())
             .set_next_token(next_token)
             .send()
             .await;
@@ -164,21 +172,77 @@ impl MarketplaceReservationOffer {
     }
 }
 
+fn add_offerings(
+    reserved: &mut Vec<MarketplaceReservationOffer>,
+    list: &[ReservedInstancesOffering],
+    region: &str,
+) {
+    for item in list {
+        // AWS API is full of Options for some reason.
+        if let Some(pricing_details) = &item.pricing_details {
+            if let Some(charges) = &item.recurring_charges {
+                if pricing_details.len() != 1 || charges.len() != 1 {
+                    continue;
+                }
+                for pricing_detail in pricing_details {
+                    if let Some(price) = pricing_detail.price {
+                        if let Some(count) = pricing_detail.count {
+                            for charge in charges {
+                                if let Some(recurring_charge) = charge.amount {
+                                    let offer = MarketplaceReservationOffer::from(
+                                        &item,
+                                        region,
+                                        price,
+                                        recurring_charge,
+                                        count,
+                                    );
+                                    reserved.push(offer);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let _ = dotenv();
 
+    let offering_classes = [Standard, Convertible];
+    let offering_types = [AllUpfront, PartialUpfront, NoUpfront];
+    let offering_classes = [Standard];
+    let offering_types = [AllUpfront];
+
     'foo: loop {
         let date = chrono::offset::Local::now().format(DATE_FORMAT).to_string();
+
         // Start crawler tasks
-        let tasks = REGIONS
-            .iter()
-            .map(|&region| {
-                let region_clone = region.to_string();
-                let res = tokio::spawn(async { show_state(region_clone).await });
-                (region.to_string(), res)
-            })
-            .collect_vec();
+        let mut tasks = vec![];
+        for &region in REGIONS {
+            for offering_class in &offering_classes {
+                for offering_type in &offering_types {
+                    let region_clone = region.to_string();
+                    let offering_class_clone = offering_class.clone();
+                    let offering_type_clone = offering_type.clone();
+                    let res = tokio::spawn(async {
+                        show_state(region_clone, offering_class_clone, offering_type_clone).await
+                    });
+                    tasks.push((region.to_string(), res));
+                }
+            }
+        }
+
+        // let tasks = REGIONS
+        //     .iter()
+        //     .map(|&region| {
+        //         let region_clone = region.to_string();
+        //         let res = tokio::spawn(async { show_state(region_clone).await });
+        //         (region.to_string(), res)
+        //     })
+        //     .collect_vec();
 
         // Collect results
         let mut reserved = vec![];
@@ -186,35 +250,8 @@ async fn main() -> Result<()> {
             let (region, handle) = task;
             let result = handle.await?;
 
-            // AWS API is full of Options for some reason.
             if let Ok(mut list) = result {
-                for item in list {
-                    if let Some(pricing_details) = &item.pricing_details {
-                        if let Some(charges) = &item.recurring_charges {
-                            if pricing_details.len() != 1 || charges.len() != 1 {
-                                continue;
-                            }
-                            for pricing_detail in pricing_details {
-                                if let Some(price) = pricing_detail.price {
-                                    if let Some(count) = pricing_detail.count {
-                                        for charge in charges {
-                                            if let Some(recurring_charge) = charge.amount {
-                                                let offer = MarketplaceReservationOffer::from(
-                                                    &item,
-                                                    &region,
-                                                    price,
-                                                    recurring_charge,
-                                                    count,
-                                                );
-                                                reserved.push(offer);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+                add_offerings(&mut reserved, &list, &region);
             } else {
                 println!("Err: {}, {:?}", region, result);
                 continue 'foo;
