@@ -17,7 +17,17 @@ use std::time::Duration;
 use std::time::Instant;
 
 const DATE_FORMAT: &str = "%Y%m%d-%H%M%S";
-
+static REGIONS: &[&str] = &[
+    "us-east-2",
+    "us-east-1",
+    "us-west-1",
+    "us-west-2",
+    "eu-central-1",
+    "eu-west-1",
+    "eu-west-2",
+    "eu-west-3",
+    "eu-north-1",
+];
 // Uploads a file to S3.
 async fn upload_file(bucket: &str, key: &str, content: &str) -> Result<()> {
     let region = RegionProviderChain::default_provider().or_else("us-east-1");
@@ -93,91 +103,75 @@ fn print_type_of<T>(_: &T) {
 
 #[derive(Serialize)]
 struct MarketplaceReservationOffer {
-    pub availability_zone: String,
-    /// <p>The duration of the Reserved Instance, in seconds.</p>
-    pub duration: i64,
-    /// <p>The purchase price of the Reserved Instance.</p>
-    pub fixed_price: f32,
-    /// <p>The instance type on which the Reserved Instance can be used.</p>
-    pub instance_type: String,
-    /// <p>The Reserved Instance product platform description.</p>
-    pub product_description: String,
-    /// <p>The ID of the Reserved Instance offering. This is the offering ID used in <code>GetReservedInstancesExchangeQuote</code> to confirm that an exchange can be made.</p>
-    pub reserved_instances_offering_id: String,
-    /// <p>The usage price of the Reserved Instance, per hour.</p>
-    pub usage_price: f32,
-    /// <p>The tenancy of the instance.</p>
-    pub instance_tenancy: String,
-    /// <p>If <code>convertible</code> it can be exchanged for Reserved Instances of the same or higher monetary value, with different configurations. If <code>standard</code>, it is not possible to perform an exchange.</p>
-    pub offering_class: String,
-    /// <p>The Reserved Instance offering type.</p>
-    pub offering_type: String,
-    /// <p>The pricing details of the Reserved Instance offering.</p>
-    pub pricing_details: String,
-    /// <p>The recurring charge tag assigned to the resource.</p>
-    pub recurring_charges: String,
-    /// <p>Whether the Reserved Instance is applied to instances in a Region or an Availability Zone.</p>
-    pub scope: String,
-
+    pub id: String,
     pub region: String,
+    pub count: i32,
+    pub instance_type: String,
+    pub price: f64,
+    pub recurring_charge: f64,
+    pub duration: i64,
+    pub fixed_price: f32,
+
+    pub availability_zone: String,
+    pub product_description: String,
+    pub usage_price: f32,
+    pub instance_tenancy: String,
+    pub offering_class: String,
+    pub offering_type: String,
+    pub scope: String,
+}
+
+// Convert option to string
+fn option_to_string<T: AsRef<str>>(opt: &Option<T>) -> String {
+    match opt {
+        Some(x) => x.as_ref().to_string(),
+        None => "".to_string(),
+    }
+}
+
+impl MarketplaceReservationOffer {
+    fn from(
+        item: &ReservedInstancesOffering,
+        region: &str,
+        price: f64,
+        recurring_charge: f64,
+        count: i32,
+    ) -> Self {
+        MarketplaceReservationOffer {
+            price,
+            recurring_charge,
+            region: region.to_string(),
+            count,
+            availability_zone: option_to_string(&item.availability_zone),
+            duration: item.duration.unwrap_or(-1),
+            fixed_price: item.fixed_price.unwrap_or(-1.0),
+            instance_type: option_to_string(&item.instance_type),
+            product_description: item
+                .product_description
+                .as_ref()
+                .and_then(|x| Some(x.as_str().to_string()))
+                .unwrap_or_default(),
+            id: item
+                .reserved_instances_offering_id
+                .clone()
+                .unwrap_or_default(),
+            usage_price: item.usage_price.unwrap_or(-1.0),
+            instance_tenancy: option_to_string(&item.instance_tenancy),
+            offering_class: option_to_string(&item.offering_class),
+            offering_type: option_to_string(&item.offering_type),
+            scope: option_to_string(&item.scope),
+        }
+    }
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let _ = dotenv();
 
-    let regions = [
-        "us-east-2",
-        "us-east-1",
-        "us-west-1",
-        "us-west-2",
-        // "af-south-1",
-        "ap-east-1",
-        // "ap-southeast-3",
-        "ap-south-1",
-        "ap-northeast-3",
-        "ap-northeast-2",
-        "ap-southeast-1",
-        "ap-southeast-2",
-        "ap-northeast-1",
-        "ca-central-1",
-        "eu-central-1",
-        "eu-west-1",
-        "eu-west-2",
-        // "eu-south-1",
-        "eu-west-3",
-        "eu-north-1",
-        // "me-south-1",
-        "sa-east-1",
-    ];
-    let regions = ["us-east-1", "us-east-2", "us-west-1", "us-west-2"];
-    let regions = [
-        "us-east-2",
-        "us-east-1",
-        "us-west-1",
-        "us-west-2",
-        "eu-central-1",
-        "eu-west-1",
-        "eu-west-2",
-        // "eu-south-1",
-        "eu-west-3",
-        "eu-north-1",
-    ];
-    // let regions = ["us-east-1"];
-
-    // async fn foo(i: u32) -> u32 {
-    //     i
-    // }
-    //
-    // let futures = vec![foo(1), foo(2), foo(3)];
-    // let res = futures::future::join_all(futures).await;
-    // print_type_of(&res);
-    // assert_eq!(res, [1, 2, 3]);
-
     'foo: loop {
         let date = chrono::offset::Local::now().format(DATE_FORMAT).to_string();
         // Start crawler tasks
-        let tasks = regions
+        let tasks = REGIONS
             .iter()
             .map(|&region| {
                 let region_clone = region.to_string();
@@ -191,55 +185,35 @@ async fn main() -> Result<()> {
         for task in tasks {
             let (region, handle) = task;
             let result = handle.await?;
+
+            // AWS API is full of Options for some reason.
             if let Ok(mut list) = result {
                 for item in list {
-                    reserved.push(MarketplaceReservationOffer {
-                        availability_zone: item.availability_zone.unwrap_or("".to_string()),
-                        duration: item.duration.unwrap_or(-1),
-                        fixed_price: item.fixed_price.unwrap_or(-1.0),
-                        instance_type: item
-                            .instance_type
-                            .unwrap_or(InstanceType::Unknown("".to_string()))
-                            .as_str()
-                            .to_string(),
-                        product_description: item
-                            .product_description
-                            .and_then(|x| Some(x.as_str().to_string()))
-                            .unwrap_or("".to_string()),
-                        reserved_instances_offering_id: item
-                            .reserved_instances_offering_id
-                            .and_then(|x| Some(x.as_str().to_string()))
-                            .unwrap_or("".to_string()),
-                        usage_price: item.usage_price.unwrap_or(-1.0),
-                        instance_tenancy: item
-                            .instance_tenancy
-                            .and_then(|x| Some(x.as_str().to_string()))
-                            .unwrap_or("".to_string()),
-
-                        offering_class: item
-                            .offering_class
-                            .and_then(|x| Some(x.as_str().to_string()))
-                            .unwrap_or("".to_string()),
-
-                        offering_type: item
-                            .offering_type
-                            .and_then(|x| Some(x.as_str().to_string()))
-                            .unwrap_or("".to_string()),
-
-                        pricing_details: item
-                            .pricing_details
-                            .and_then(|x| Some(format!("{:?}", x)))
-                            .unwrap_or("".to_string()),
-                        recurring_charges: item
-                            .recurring_charges
-                            .and_then(|x| Some(format!("{:?}", x)))
-                            .unwrap_or("".to_string()),
-                        scope: item
-                            .scope
-                            .and_then(|x| Some(format!("{:?}", x)))
-                            .unwrap_or("".to_string()),
-                        region: region.clone(),
-                    });
+                    if let Some(pricing_details) = &item.pricing_details {
+                        if let Some(charges) = &item.recurring_charges {
+                            if pricing_details.len() != 1 || charges.len() != 1 {
+                                continue;
+                            }
+                            for pricing_detail in pricing_details {
+                                if let Some(price) = pricing_detail.price {
+                                    if let Some(count) = pricing_detail.count {
+                                        for charge in charges {
+                                            if let Some(recurring_charge) = charge.amount {
+                                                let offer = MarketplaceReservationOffer::from(
+                                                    &item,
+                                                    &region,
+                                                    price,
+                                                    recurring_charge,
+                                                    count,
+                                                );
+                                                reserved.push(offer);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             } else {
                 println!("Err: {}, {:?}", region, result);
@@ -252,32 +226,6 @@ async fn main() -> Result<()> {
         let file_name = format!("{date}-v2.json");
         upload_file("ec2-scraper", &file_name, &json).await?;
 
-        // let res = futures::future::try_join_all(tasks).await;
-        // print_type_of(&res);
-        // if let Ok(res2) = res {
-        //     println!("{:?}", res2);
-        // } else {
-        //     println!("Err: {:?}", res);
-        // }
-
-        // if let Ok(res) = futures::future::try_join_all(tasks).await {
-        //     // let res2 = res.into_iter().flatten().collect::<Vec<_>>();
-        //     for r in res {
-        //         println!("{:?}", r);
-        //         // if let Ok(mut res) = r {
-        //         //     reserved.append(&mut res);
-        //         // } else {
-        //         //     println!("Err: {:?}", r);
-        //         //     continue 'foo;
-        //         // }
-        //     }
-        // }
-        // let res2 = res.into_iter().flatten().collect::<Vec<_>>();
-        // if let Ok(reserved) = res2 {
-        //     let content = format!("{:#?}", reserved);
-        //     let file_name = format!("{date}-v1.txt");
-        //     upload_file("ec2-scraper", &file_name, &content).await?;
-        // }
         tokio::time::sleep(Duration::from_secs(60)).await;
     }
 }
