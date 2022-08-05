@@ -251,7 +251,7 @@ fn add_offerings(
     }
 }
 
-async fn write_result_to_s3(result: &[MarketplaceReservationOffer]) -> Result<()> {
+async fn write_result_to_s3(result: &[MarketplaceReservationOffer], date: &str) -> Result<()> {
     let json = serde_json::to_string(&result)?;
     let file_name = format!("db/{date}-v3.json");
     upload_file_to_s3("ec2-scraper", &file_name, &json).await?;
@@ -322,7 +322,7 @@ async fn main() -> Result<()> {
         }
 
         if !has_error {
-            let _ = write_result_to_s3(&reserved).await;
+            let _ = write_result_to_s3(&reserved, &date).await;
         }
     }
 }
