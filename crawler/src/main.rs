@@ -1,25 +1,21 @@
 extern crate dotenv;
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use aws_config::meta::region::RegionProviderChain;
-use aws_sdk_ec2::error::DescribeReservedInstancesOfferingsErrorKind;
-use aws_sdk_ec2::model::CapacityReservationInstancePlatform::LinuxUnix;
+use aws_sdk_ec2::error::DescribeReservedInstancesOfferingsError;
 use aws_sdk_ec2::model::OfferingClassType::{Convertible, Standard};
 use aws_sdk_ec2::model::OfferingTypeValues::{AllUpfront, NoUpfront, PartialUpfront};
 use aws_sdk_ec2::model::{
-    filter, CapacityReservationInstancePlatform, Filter, InstanceType, OfferingClassType,
-    OfferingTypeValues, ReservedInstancesOffering, RiProductDescription, Tenancy,
+    filter, Filter, OfferingClassType, OfferingTypeValues, ReservedInstancesOffering,
 };
+use aws_sdk_ec2::output::DescribeReservedInstancesOfferingsOutput;
+use aws_sdk_ec2::types::SdkError;
 use aws_sdk_ec2::{Client, Region};
-use aws_sdk_s3::types::ByteStream;
 use bytes::Bytes;
 use dotenv::dotenv;
-use itertools::Itertools;
 use serde::Serialize;
 use std::time::Duration;
-use std::time::Instant;
-use tracing::{debug, error, info, warn, Level};
-use tracing_subscriber::FmtSubscriber;
+use tracing::{debug, error, info, warn};
 
 const DATE_FORMAT: &str = "%Y%m%d-%H%M%S";
 static REGIONS: &[&str] = &[
@@ -50,8 +46,46 @@ async fn upload_file_to_s3(bucket: &str, key: &str, content: &str) -> Result<()>
         .send()
         .await?;
 
-    println!("Uploaded {}", key);
+    info!("Uploaded {}", key);
     Ok(())
+}
+
+async fn get_single_offering(
+    client: &Client,
+    filter: &Filter,
+    offering_class: &OfferingClassType,
+    offering_type: &OfferingTypeValues,
+    next_token: &Option<String>,
+) -> Result<
+    DescribeReservedInstancesOfferingsOutput,
+    SdkError<DescribeReservedInstancesOfferingsError>,
+> {
+    let mut retry_count = 3;
+    loop {
+        let response = client
+            .describe_reserved_instances_offerings()
+            .filters(filter.clone())
+            .include_marketplace(true)
+            .offering_class(offering_class.clone())
+            .offering_type(offering_type.clone())
+            .set_next_token(next_token.clone())
+            .send()
+            .await;
+        if response.is_ok() {
+            return response;
+        }
+        if format!("{:?}", response).contains("RequestLimitExceeded") {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            debug!("RequestLimitExceeded, retrying.");
+            continue;
+        }
+        debug!("Failed to get offerings: {:?}", response);
+        retry_count -= 1;
+        if retry_count == 0 {
+            error!("Out of retries, giving up. Last error: {:?}", response);
+            return response;
+        }
+    }
 }
 
 #[tracing::instrument]
@@ -72,33 +106,17 @@ async fn fetch_marketplace_offers_once(
     let mut next_token = None;
     let mut res = vec![];
     for count in 1.. {
-        let span = tracing::debug_span!("asdfasdf");
-        let _guard = span.enter();
-        let resp = client
-            .describe_reserved_instances_offerings()
-            .filters(filter.clone())
-            .include_marketplace(true)
-            .offering_class(offering_class.clone())
-            .offering_type(offering_type.clone())
-            .set_next_token(next_token.clone())
-            .send()
-            .await;
-        drop(_guard);
-
-        let resp = if let Ok(x) = resp {
-            x
-        } else {
-            if format!("{:?}", resp).contains("RequestLimitExceeded") {
-                tokio::time::sleep(Duration::from_millis(100)).await;
-                continue;
-            }
-            return Err(anyhow!("{:?} {:#?}", region_name, resp));
-        };
+        let resp = get_single_offering(
+            &client,
+            &filter,
+            &offering_class,
+            &offering_type,
+            &next_token,
+        )
+        .await?;
 
         if let Some(mut offerings) = resp.reserved_instances_offerings {
-            if offerings.len() > 0 {
-                res.append(&mut offerings);
-            }
+            res.append(&mut offerings);
         }
 
         next_token = resp.next_token;
@@ -108,7 +126,7 @@ async fn fetch_marketplace_offers_once(
         debug!("Iteration {count}");
     }
 
-    info!("Result length: {}", res.len());
+    debug!("Finished, result length: {}", res.len());
     Ok(res)
 }
 
@@ -133,10 +151,6 @@ async fn fetch_marketplace_offers(
         }
     }
     result
-}
-
-fn print_type_of<T>(_: &T) {
-    println!("{}", std::any::type_name::<T>())
 }
 
 #[derive(Serialize)]
@@ -240,22 +254,23 @@ fn add_offerings(
 #[tokio::main]
 async fn main() -> Result<()> {
     let _ = dotenv();
-    // let subscriber = FmtSubscriber::builder()
-    //     .with_max_level(Level::DEBUG)
-    //     .finish();
-    // tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
     tracing_subscriber::fmt::init();
-
-    info!("Starting");
+    // tracing_subscriber::fmt()
+    //     .event_format(
+    //         tracing_subscriber::fmt::format()
+    //             .with_file(true)
+    //             .with_line_number(true),
+    //     )
+    //     .init();
 
     let offering_classes = [Standard, Convertible];
     let offering_types = [AllUpfront, PartialUpfront, NoUpfront];
     // let offering_classes = [Standard];
     // let offering_types = [AllUpfront];
 
-    'foo: loop {
+    loop {
         let date = chrono::offset::Local::now().format(DATE_FORMAT).to_string();
-
+        info!("Starting iteration {}", date);
         // Start crawler tasks
         let mut tasks = vec![];
         for &region in REGIONS {
@@ -284,7 +299,7 @@ async fn main() -> Result<()> {
             let (region, handle) = task;
             let result = handle.await?;
 
-            if let Ok(mut list) = result {
+            if let Ok(list) = result {
                 add_offerings(&mut reserved, &list, &region);
                 info!("Added {} offerings from {}", list.len(), region);
             } else {
@@ -299,8 +314,9 @@ async fn main() -> Result<()> {
 
         // Write to file
         let json = serde_json::to_string(&reserved)?;
-        let file_name = format!("{date}-v2.json");
+        let file_name = format!("db/{date}-v3.json");
         upload_file_to_s3("ec2-scraper", &file_name, &json).await?;
+        upload_file_to_s3("ec2-scraper", "latest.txt", &file_name).await?;
 
         tokio::time::sleep(Duration::from_secs(60)).await;
     }
