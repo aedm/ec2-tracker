@@ -251,6 +251,14 @@ fn add_offerings(
     }
 }
 
+async fn write_result_to_s3(result: &[MarketplaceReservationOffer]) -> Result<()> {
+    let json = serde_json::to_string(&result)?;
+    let file_name = format!("db/{date}-v3.json");
+    upload_file_to_s3("ec2-scraper", &file_name, &json).await?;
+    upload_file_to_s3("ec2-scraper", "latest.txt", &file_name).await?;
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let _ = dotenv();
@@ -271,6 +279,7 @@ async fn main() -> Result<()> {
     loop {
         let date = chrono::offset::Local::now().format(DATE_FORMAT).to_string();
         info!("Starting iteration {}", date);
+
         // Start crawler tasks
         let mut tasks = vec![];
         for &region in REGIONS {
@@ -297,27 +306,23 @@ async fn main() -> Result<()> {
         let mut has_error = false;
         for task in tasks {
             let (region, handle) = task;
-            let result = handle.await?;
-
-            if let Ok(list) = result {
-                add_offerings(&mut reserved, &list, &region);
-                info!("Added {} offerings from {}", list.len(), region);
+            let handle_result = handle.await;
+            if let Ok(result) = handle_result {
+                if let Ok(list) = result {
+                    add_offerings(&mut reserved, &list, &region);
+                    info!("Added {} offerings from {}", list.len(), region);
+                } else {
+                    error!("{}, {:?}", region, result);
+                    has_error = true;
+                }
             } else {
-                error!("{}, {:?}", region, result);
+                error!("Can't join task. {}, {:?}", region, handle_result);
                 has_error = true;
             }
         }
 
-        if has_error {
-            continue;
+        if !has_error {
+            let _ = write_result_to_s3(&reserved).await;
         }
-
-        // Write to file
-        let json = serde_json::to_string(&reserved)?;
-        let file_name = format!("db/{date}-v3.json");
-        upload_file_to_s3("ec2-scraper", &file_name, &json).await?;
-        upload_file_to_s3("ec2-scraper", "latest.txt", &file_name).await?;
-
-        tokio::time::sleep(Duration::from_secs(60)).await;
     }
 }
