@@ -25,7 +25,7 @@ interface FetchHook {
     date: Ref<string>
 }
 
-const BASE_URL = 'https://d34h1fsl1j7rca.cloudfront.net';
+const BASE_URL = 'https://ec2-scraper.s3.amazonaws.com';
 
 export function useFetchMarketplaceData(): FetchHook {
     const result = ref(asType<Offer[]>([]));
