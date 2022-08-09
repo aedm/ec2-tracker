@@ -1,0 +1,26 @@
+name: CD
+
+on:
+  push:
+    branches:
+      - 'main'
+  pull_request:
+
+jobs:
+  deploy_webapp:
+    name: Deploy web app
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Build
+        run: |
+          cd webapp
+          yarn
+          yarn build
+
+      - name: Deploy
+        uses: JamesIves/github-pages-deploy-action@v4
+        with:
+          folder: webapp/dist
