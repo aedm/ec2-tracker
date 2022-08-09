@@ -6,3 +6,23 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+aws-config = "0.15.0"
+aws-sdk-ec2 = "0.15.0"
+aws-sdk-s3 = "0.15.0"
+tokio = { version = "1", features = ["full"] }
+dotenv = "0.15.0"
+anyhow = "1.0"
+tracing = "0.1.36"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+bytes = "*"
+chrono = "*"
+itertools = "*"
+futures = "*"
+serde = { version = "*", features = ["derive"] }
+serde_json = "*"
+
+[profile.dev.package."*"]
+opt-level = 'z'
+debug = false
+debug-assertions = false
+overflow-checks = false
