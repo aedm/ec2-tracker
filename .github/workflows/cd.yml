@@ -18,7 +18,7 @@ jobs:
         run: |
           cd webapp
           yarn
-          yarn build --base=/ec2-crawler
+          yarn build --base=/ec2-tracker
 
       - name: Deploy
         uses: JamesIves/github-pages-deploy-action@v4
