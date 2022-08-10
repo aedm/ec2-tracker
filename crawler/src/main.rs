@@ -88,7 +88,6 @@ async fn get_single_offering(
     }
 }
 
-#[tracing::instrument]
 async fn fetch_marketplace_offers_once(
     region_name: String,
     offering_class: OfferingClassType,
