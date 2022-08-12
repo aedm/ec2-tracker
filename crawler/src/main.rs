@@ -1,9 +1,12 @@
+mod ec2_instance_types;
+mod ec2_reserved_offers;
 mod ec2_utils;
 mod s3_utils;
 
 extern crate dotenv;
 
-use crate::ec2_utils::{fetch_offerings, MarketplaceReservationOffer};
+use crate::ec2_instance_types::fetch_instance_type_list;
+use crate::ec2_reserved_offers::fetch_offerings;
 use crate::s3_utils::upload_file_to_s3;
 use anyhow::Result;
 use dotenv::dotenv;
@@ -29,6 +32,9 @@ async fn run_cycle() -> Result<()> {
 async fn main() -> Result<()> {
     let _ = dotenv();
     tracing_subscriber::fmt::init();
+
+    fetch_instance_type_list().await?;
+    return Ok(());
 
     loop {
         if let Err(e) = run_cycle().await {
