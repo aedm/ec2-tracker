@@ -1,16 +1,6 @@
-use anyhow::{anyhow, Result};
-use aws_sdk_ec2::error::DescribeReservedInstancesOfferingsError;
-use aws_sdk_ec2::model::OfferingClassType::{Convertible, Standard};
-use aws_sdk_ec2::model::OfferingTypeValues::{AllUpfront, NoUpfront, PartialUpfront};
-use aws_sdk_ec2::model::{
-    filter, Filter, OfferingClassType, OfferingTypeValues, ReservedInstancesOffering,
-};
-use aws_sdk_ec2::output::DescribeReservedInstancesOfferingsOutput;
-use aws_sdk_ec2::types::SdkError;
+use anyhow::Result;
+
 use aws_sdk_ec2::{Client, Region};
-use serde::Serialize;
-use std::time::Duration;
-use tracing::{debug, error, info, warn};
 
 pub static REGIONS: &[&str] = &[
     "us-east-2",

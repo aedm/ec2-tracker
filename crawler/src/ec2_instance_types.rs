@@ -1,17 +1,5 @@
 use crate::ec2_utils::{make_ec2_client, REGIONS};
 use anyhow::{anyhow, Result};
-use aws_sdk_ec2::error::DescribeReservedInstancesOfferingsError;
-use aws_sdk_ec2::model::OfferingClassType::{Convertible, Standard};
-use aws_sdk_ec2::model::OfferingTypeValues::{AllUpfront, NoUpfront, PartialUpfront};
-use aws_sdk_ec2::model::{
-    filter, Filter, OfferingClassType, OfferingTypeValues, ReservedInstancesOffering,
-};
-use aws_sdk_ec2::output::DescribeReservedInstancesOfferingsOutput;
-use aws_sdk_ec2::types::SdkError;
-use aws_sdk_ec2::{Client, Region};
-use serde::Serialize;
-use std::time::Duration;
-use tracing::{debug, error, info, warn};
 
 pub struct InstanceType {
     pub name: String,
@@ -21,7 +9,7 @@ pub struct InstanceType {
 }
 
 pub async fn fetch_instance_type_list() -> Result<Vec<InstanceType>> {
-    let mut result = vec![];
+    let result = vec![];
     let client = make_ec2_client(REGIONS[0].to_string()).await?;
     let response = client.describe_instance_type_offerings().send().await?;
     println!("{:#?}", response.instance_type_offerings);

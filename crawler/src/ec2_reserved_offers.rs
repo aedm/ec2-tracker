@@ -8,7 +8,7 @@ use aws_sdk_ec2::model::{
 };
 use aws_sdk_ec2::output::DescribeReservedInstancesOfferingsOutput;
 use aws_sdk_ec2::types::SdkError;
-use aws_sdk_ec2::{Client, Region};
+use aws_sdk_ec2::Client;
 use serde::Serialize;
 use std::time::Duration;
 use tracing::{debug, error, info, warn};

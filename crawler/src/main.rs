@@ -3,14 +3,11 @@ mod ec2_reserved_offers;
 mod ec2_utils;
 mod s3_utils;
 
-extern crate dotenv;
-
 use crate::ec2_instance_types::fetch_instance_type_list;
 use crate::ec2_reserved_offers::fetch_offerings;
 use crate::s3_utils::upload_file_to_s3;
 use anyhow::Result;
 use dotenv::dotenv;
-use std::time::Duration;
 use tracing::{error, info};
 
 const DATE_FORMAT: &str = "%Y%m%d-%H%M%S";
