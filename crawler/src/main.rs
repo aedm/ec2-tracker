@@ -8,6 +8,7 @@ use crate::ec2_reserved_offers::fetch_offerings;
 use crate::s3_utils::upload_file_to_s3;
 use anyhow::Result;
 use dotenv::dotenv;
+use futures::future::join_all;
 use tracing::{error, info};
 
 const DATE_FORMAT: &str = "%Y%m%d-%H%M%S";
@@ -30,12 +31,14 @@ async fn main() -> Result<()> {
     let _ = dotenv();
     tracing_subscriber::fmt::init();
 
-    fetch_instance_type_list().await?;
+    let instance_types = fetch_instance_type_list().await?;
+    println!("{:#?}", instance_types);
+
     return Ok(());
 
-    loop {
-        if let Err(e) = run_cycle().await {
-            error!("{}", e);
-        }
-    }
+    // loop {
+    //     if let Err(e) = run_cycle().await {
+    //         error!("{}", e);
+    //     }
+    // }
 }
